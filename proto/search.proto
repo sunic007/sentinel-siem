@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package sentinel.search;
+
+import "common.proto";
+
+option cc_enable_arenas = true;
+
+// Search service - executes SPL queries against indexed data
+service SearchService {
+  // Execute a search query and stream results back
+  rpc ExecuteQuery(SearchRequest) returns (stream SearchResponse);
+
+  // Execute a query and return all results at once (for small result sets)
+  rpc ExecuteQuerySync(SearchRequest) returns (SearchResultSet);
+
+  // Cancel a running search
+  rpc CancelSearch(CancelSearchRequest) returns (CancelSearchResponse);
+
+  // Get search job status
+  rpc GetSearchStatus(GetSearchStatusRequest) returns (GetSearchStatusResponse);
+
+  // Parse SPL query and return AST (for syntax validation / editor support)
+  rpc ParseQuery(ParseQueryRequest) returns (ParseQueryResponse);
+}
+
+message SearchRequest {
+  string query = 1;                           // SPL query string
+  sentinel.common.TimeRange time_range = 2;   // Time bounds
+  int32 max_results = 3;                      // Max events to return (0 = unlimited)
+  string search_id = 4;                       // Client-provided search ID
+  map<string, string> params = 5;             // Additional parameters
+}
+
+message SearchResponse {
+  oneof result {
+    EventBatch events = 1;        // Batch of matching events
+    SearchStats stats = 2;        // Aggregation results (stats, timechart)
+    SearchProgress progress = 3;  // Progress update
+    SearchError error = 4;        // Error during search
+  }
+}
+
+message EventBatch {
+  repeated sentinel.common.Event events = 1;
+  bool is_final = 2;  // True if this is the last batch
+}
+
+message SearchStats {
+  repeated StatsRow rows = 1;
+  repeated string columns = 2;
+  bool is_final = 3;
+}
+
+message StatsRow {
+  repeated string values = 1;
+}
+
+message SearchProgress {
+  float percent_complete = 1;
+  int64 events_scanned = 2;
+  int64 events_matched = 3;
+  int64 segments_scanned = 4;
+  int64 segments_total = 5;
+}
+
+message SearchError {
+  string message = 1;
+  int32 line = 2;
+  int32 column = 3;
+}
+
+message SearchResultSet {
+  repeated sentinel.common.Event events = 1;
+  SearchStats stats = 2;
+  int64 total_count = 3;
+  float execution_time_ms = 4;
+}
+
+message CancelSearchRequest {
+  string search_id = 1;
+}
+
+message CancelSearchResponse {
+  bool success = 1;
+}
+
+message GetSearchStatusRequest {
+  string search_id = 1;
+}
+
+message GetSearchStatusResponse {
+  enum State {
+    UNKNOWN = 0;
+    RUNNING = 1;
+    COMPLETED = 2;
+    CANCELLED = 3;
+    FAILED = 4;
+  }
+  State state = 1;
+  SearchProgress progress = 2;
+}
+
+message ParseQueryRequest {
+  string query = 1;
+}
+
+message ParseQueryResponse {
+  bool valid = 1;
+  repeated SearchError errors = 2;
+  repeated string referenced_fields = 3;
+  repeated string referenced_indexes = 4;
+}

@@ -1,0 +1,50 @@
+# Build
+build/
+dist/
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+
+# C++ IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+cmake-build-*/
+compile_commands.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+venv/
+.env
+*.env.local
+
+# Node
+node_modules/
+frontend/dist/
+.cache/
+
+# Data
+data/
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Secrets
+*.pem
+*.key
+*.crt
+credentials.json

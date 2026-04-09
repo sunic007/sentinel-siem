@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package sentinel.ingest;
+
+import "common.proto";
+
+option cc_enable_arenas = true;
+
+// Ingest service - receives events and stores them in the engine
+service IngestService {
+  // Send a batch of events for indexing
+  rpc SendEvents(SendEventsRequest) returns (SendEventsResponse);
+
+  // Stream events continuously (for high-throughput connectors)
+  rpc StreamEvents(stream SendEventsRequest) returns (SendEventsResponse);
+
+  // Get ingest pipeline status
+  rpc GetIngestStatus(GetIngestStatusRequest) returns (GetIngestStatusResponse);
+}
+
+message SendEventsRequest {
+  string index = 1;                          // Target index name
+  string sourcetype = 2;                     // Source type for all events in batch
+  string source = 3;                         // Source identifier
+  string host = 4;                           // Host identifier
+  repeated sentinel.common.Event events = 5; // Events to ingest
+}
+
+message SendEventsResponse {
+  int64 events_accepted = 1;
+  int64 events_rejected = 2;
+  repeated string errors = 3;
+}
+
+message GetIngestStatusRequest {}
+
+message GetIngestStatusResponse {
+  int64 events_per_second = 1;
+  int64 bytes_per_second = 2;
+  int64 total_events_ingested = 3;
+  int64 queue_depth = 4;
+  repeated InputStatus inputs = 5;
+}
+
+message InputStatus {
+  string name = 1;
+  string type = 2;         // syslog, file_monitor, api, etc.
+  bool active = 3;
+  int64 events_received = 4;
+  int64 bytes_received = 5;
+  string last_event_time = 6;
+}

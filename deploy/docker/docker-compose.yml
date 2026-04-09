@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  engine:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.engine
+    ports:
+      - "50051:50051"
+      - "8080:8080"
+    volumes:
+      - engine-data:/app/data
+      - engine-logs:/app/logs
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://sentinel:sentinel@postgres:5432/sentinel
+      - REDIS_URL=redis://redis:6379/0
+      - ENGINE_HOST=engine
+      - ENGINE_PORT=50051
+    depends_on:
+      - postgres
+      - redis
+      - engine
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  celery-worker:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.backend
+    command: celery -A sentinel.tasks.celery_app worker -l info -c 4
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://sentinel:sentinel@postgres:5432/sentinel
+      - REDIS_URL=redis://redis:6379/0
+      - ENGINE_HOST=engine
+      - ENGINE_PORT=50051
+    depends_on:
+      - postgres
+      - redis
+      - engine
+    restart: unless-stopped
+
+  celery-beat:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/Dockerfile.backend
+    command: celery -A sentinel.tasks.celery_app beat -l info
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://sentinel:sentinel@postgres:5432/sentinel
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=sentinel
+      - POSTGRES_PASSWORD=sentinel
+      - POSTGRES_DB=sentinel
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  engine-data:
+  engine-logs:
+  postgres-data:
+  redis-data:

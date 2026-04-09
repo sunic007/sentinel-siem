@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package sentinel.common;
+
+option cc_enable_arenas = true;
+
+// Timestamp with microsecond precision
+message Timestamp {
+  int64 seconds = 1;
+  int32 microseconds = 2;
+}
+
+// A single log event
+message Event {
+  string id = 1;
+  Timestamp time = 2;
+  string raw = 3;           // Original log line
+  string host = 4;
+  string source = 5;
+  string sourcetype = 6;
+  string index = 7;
+  map<string, string> fields = 8;  // Extracted fields
+}
+
+// Time range for queries
+message TimeRange {
+  Timestamp earliest = 1;
+  Timestamp latest = 2;
+}
+
+// Severity levels
+enum Severity {
+  SEVERITY_UNKNOWN = 0;
+  SEVERITY_INFO = 1;
+  SEVERITY_LOW = 2;
+  SEVERITY_MEDIUM = 3;
+  SEVERITY_HIGH = 4;
+  SEVERITY_CRITICAL = 5;
+}
+
+// Pagination
+message Pagination {
+  int32 offset = 1;
+  int32 limit = 2;
+}
+
+// Generic key-value pair
+message KeyValue {
+  string key = 1;
+  string value = 2;
+}
+
+// Health check
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  enum Status {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+  }
+  Status status = 1;
+  string version = 2;
+  int64 uptime_seconds = 3;
+}

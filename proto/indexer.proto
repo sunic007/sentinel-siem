@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package sentinel.indexer;
+
+import "common.proto";
+
+option cc_enable_arenas = true;
+
+// Index management service
+service IndexerService {
+  // Create a new index
+  rpc CreateIndex(CreateIndexRequest) returns (CreateIndexResponse);
+
+  // List all indexes
+  rpc ListIndexes(ListIndexesRequest) returns (ListIndexesResponse);
+
+  // Get detailed stats for an index
+  rpc GetIndexStats(GetIndexStatsRequest) returns (GetIndexStatsResponse);
+
+  // Delete an index
+  rpc DeleteIndex(DeleteIndexRequest) returns (DeleteIndexResponse);
+
+  // Trigger compaction on an index
+  rpc CompactIndex(CompactIndexRequest) returns (CompactIndexResponse);
+
+  // Health check
+  rpc HealthCheck(sentinel.common.HealthCheckRequest) returns (sentinel.common.HealthCheckResponse);
+}
+
+message CreateIndexRequest {
+  string name = 1;
+  IndexConfig config = 2;
+}
+
+message IndexConfig {
+  int64 max_size_bytes = 1;         // Max total size (0 = unlimited)
+  int32 retention_days = 2;         // Days to keep data (0 = unlimited)
+  int32 segment_size_mb = 3;        // Target segment size (default 256MB)
+  string compression = 4;           // zstd (default) or lz4
+  int32 replication_factor = 5;     // Number of replicas (default 1)
+}
+
+message CreateIndexResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message ListIndexesRequest {}
+
+message ListIndexesResponse {
+  repeated IndexInfo indexes = 1;
+}
+
+message IndexInfo {
+  string name = 1;
+  int64 total_events = 2;
+  int64 total_size_bytes = 3;
+  int32 segment_count = 4;
+  sentinel.common.Timestamp earliest_event = 5;
+  sentinel.common.Timestamp latest_event = 6;
+  IndexConfig config = 7;
+}
+
+message GetIndexStatsRequest {
+  string name = 1;
+}
+
+message GetIndexStatsResponse {
+  IndexInfo info = 1;
+  repeated SegmentInfo segments = 2;
+  IngestStats ingest_stats = 3;
+}
+
+message SegmentInfo {
+  string id = 1;
+  int64 event_count = 2;
+  int64 size_bytes = 3;
+  sentinel.common.Timestamp earliest = 4;
+  sentinel.common.Timestamp latest = 5;
+  string state = 6;  // hot, warm, cold, frozen
+}
+
+message IngestStats {
+  double events_per_second = 1;
+  double bytes_per_second = 2;
+  int64 total_events = 3;
+  int64 total_bytes = 4;
+}
+
+message DeleteIndexRequest {
+  string name = 1;
+}
+
+message DeleteIndexResponse {
+  bool success = 1;
+  string error = 2;
+}
+
+message CompactIndexRequest {
+  string name = 1;
+}
+
+message CompactIndexResponse {
+  bool success = 1;
+  int32 segments_merged = 2;
+  int64 bytes_reclaimed = 3;
+}

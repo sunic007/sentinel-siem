@@ -1,28 +1,97 @@
-import React, { useEffect, useState } from 'react';
-import { Card, Col, Row, Statistic, Typography, Table, Tag } from 'antd';
+import React, { useEffect, useState, useCallback } from 'react';
+import { Card, Col, Row, Statistic, Typography, Table, Tag, Button, Space } from 'antd';
 import {
   AlertOutlined,
   CheckCircleOutlined,
   WarningOutlined,
   ClockCircleOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 
 const { Title } = Typography;
 
+interface Notable {
+  id: string;
+  rule_id: string;
+  rule_name: string;
+  severity: string;
+  title: string;
+  description: string;
+  mitre: string[];
+  risk_score: number;
+  status: string;
+  source: string;
+  host: string;
+  created_at: string;
+}
+
+interface NotableStats {
+  total: number;
+  open: number;
+  by_severity: Record<string, number>;
+}
+
+const severityColors: Record<string, string> = {
+  critical: 'red',
+  high: 'orange',
+  medium: 'gold',
+  low: 'green',
+  info: 'blue',
+};
+
+const statusColors: Record<string, string> = {
+  new: 'red',
+  in_progress: 'orange',
+  resolved: 'green',
+  closed: 'default',
+};
+
 const SecurityPosture: React.FC = () => {
   const [totalEvents, setTotalEvents] = useState(0);
-  const [engineStatus, setEngineStatus] = useState<Record<string, unknown>>({});
+  const [notables, setNotables] = useState<Notable[]>([]);
+  const [stats, setStats] = useState<NotableStats>({ total: 0, open: 0, by_severity: {} });
+  const [resolvedToday] = useState(0);
+  const [loading, setLoading] = useState(false);
+
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      // Engine total events
+      const healthResp = await fetch('/api/health');
+      if (healthResp.ok) {
+        const health = await healthResp.json();
+        setTotalEvents(Number(health.engine?.total_events_ingested || 0));
+      }
+
+      // Notable stats
+      const statsResp = await fetch('/api/notables/stats');
+      if (statsResp.ok) {
+        const s: NotableStats = await statsResp.json();
+        setStats(s);
+      }
+
+      // Recent notables
+      const notablesResp = await fetch('/api/notables/?limit=50');
+      if (notablesResp.ok) {
+        const data: Notable[] = await notablesResp.json();
+        setNotables(data);
+      }
+    } catch (_) {
+      // Engine not running — leave previous state
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    fetch('/api/health')
-      .then((r) => r.json())
-      .then((data) => {
-        setEngineStatus(data.engine || {});
-        setTotalEvents(Number(data.engine?.total_events_ingested || 0));
-      })
-      .catch(() => {});
-  }, []);
+    fetchData();
+    // Auto-refresh every 30 seconds
+    const timer = setInterval(fetchData, 30_000);
+    return () => clearInterval(timer);
+  }, [fetchData]);
+
+  // Events over time — static placeholder (would need timeseries endpoint)
   const eventsOverTimeOption = {
     tooltip: { trigger: 'axis' },
     xAxis: {
@@ -50,85 +119,52 @@ const SecurityPosture: React.FC = () => {
     backgroundColor: 'transparent',
   };
 
+  // Severity pie — from live stats
+  const severityPalette: Record<string, string> = {
+    critical: '#ff4d4f',
+    high: '#ff7a45',
+    medium: '#ffc53d',
+    low: '#52c41a',
+    info: '#1668dc',
+  };
+
+  const severityPieData = Object.entries(stats.by_severity).map(([name, value]) => ({
+    value,
+    name,
+    itemStyle: { color: severityPalette[name] ?? '#888' },
+  }));
+
   const severityOption = {
     tooltip: { trigger: 'item' },
     series: [
       {
         type: 'pie',
         radius: ['40%', '70%'],
-        data: [
-          { value: 12, name: 'Critical', itemStyle: { color: '#ff4d4f' } },
-          { value: 28, name: 'High', itemStyle: { color: '#ff7a45' } },
-          { value: 45, name: 'Medium', itemStyle: { color: '#ffc53d' } },
-          { value: 89, name: 'Low', itemStyle: { color: '#52c41a' } },
-          { value: 156, name: 'Info', itemStyle: { color: '#1668dc' } },
-        ],
+        data: severityPieData.length > 0
+          ? severityPieData
+          : [{ value: 1, name: 'No data', itemStyle: { color: '#303030' } }],
         label: { color: '#ccc' },
       },
     ],
     backgroundColor: 'transparent',
   };
 
-  const recentNotables = [
-    {
-      key: '1',
-      time: '2024-01-15 14:32:00',
-      title: 'Brute Force Attack Detected',
-      severity: 'critical',
-      status: 'new',
-      source: 'auth.log',
-    },
-    {
-      key: '2',
-      time: '2024-01-15 14:28:00',
-      title: 'Suspicious DNS Query',
-      severity: 'high',
-      status: 'in_progress',
-      source: 'dns_logs',
-    },
-    {
-      key: '3',
-      time: '2024-01-15 14:15:00',
-      title: 'Unusual Outbound Traffic',
-      severity: 'medium',
-      status: 'new',
-      source: 'firewall',
-    },
-    {
-      key: '4',
-      time: '2024-01-15 13:45:00',
-      title: 'Failed Login - Service Account',
-      severity: 'high',
-      status: 'resolved',
-      source: 'windows_security',
-    },
-  ];
-
-  const severityColors: Record<string, string> = {
-    critical: 'red',
-    high: 'orange',
-    medium: 'gold',
-    low: 'green',
-    info: 'blue',
-  };
-
-  const statusColors: Record<string, string> = {
-    new: 'red',
-    in_progress: 'orange',
-    resolved: 'green',
-    closed: 'default',
-  };
-
   const columns = [
-    { title: 'Time', dataIndex: 'time', key: 'time', width: 180 },
-    { title: 'Title', dataIndex: 'title', key: 'title' },
+    {
+      title: 'Time',
+      dataIndex: 'created_at',
+      key: 'created_at',
+      width: 180,
+      render: (ts: string) => new Date(ts).toLocaleString(),
+    },
+    { title: 'Rule', dataIndex: 'title', key: 'title' },
     {
       title: 'Severity',
       dataIndex: 'severity',
       key: 'severity',
       width: 100,
-      render: (severity: string) => (
-        <Tag color={severityColors[severity]}>{severity.toUpperCase()}</Tag>
+      render: (s: string) => (
+        <Tag color={severityColors[s]}>{s.toUpperCase()}</Tag>
       ),
     },
     {
@@ -136,18 +172,41 @@ const SecurityPosture: React.FC = () => {
       dataIndex: 'status',
       key: 'status',
       width: 120,
-      render: (status: string) => (
-        <Tag color={statusColors[status]}>{status.replace('_', ' ').toUpperCase()}</Tag>
+      render: (s: string) => (
+        <Tag color={statusColors[s]}>{s.replace('_', ' ').toUpperCase()}</Tag>
       ),
     },
-    { title: 'Source', dataIndex: 'source', key: 'source', width: 150 },
+    { title: 'Host', dataIndex: 'host', key: 'host', width: 160 },
+    {
+      title: 'MITRE',
+      dataIndex: 'mitre',
+      key: 'mitre',
+      width: 200,
+      render: (mitre: string[]) => (
+        <Space wrap>
+          {mitre.map((t) => (
+            <Tag key={t} style={{ fontFamily: 'monospace' }}>{t}</Tag>
+          ))}
+        </Space>
+      ),
+    },
   ];
 
   return (
     <div style={{ padding: 16 }}>
-      <Title level={3} style={{ color: '#fff', marginBottom: 24 }}>
-        Security Posture Dashboard
-      </Title>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 24, gap: 12 }}>
+        <Title level={3} style={{ color: '#fff', margin: 0 }}>
+          Security Posture Dashboard
+        </Title>
+        <Button
+          icon={<ReloadOutlined />}
+          loading={loading}
+          onClick={fetchData}
+          size="small"
+        >
+          Refresh
+        </Button>
+      </div>
 
       <Row gutter={[16, 16]}>
         <Col span={6}>
@@ -164,7 +223,7 @@ const SecurityPosture: React.FC = () => {
           <Card style={{ background: '#1a1a1a', border: '1px solid #303030' }}>
             <Statistic
               title="Notable Events"
-              value={330}
+              value={stats.total}
               prefix={<AlertOutlined />}
               valueStyle={{ color: '#ff7a45' }}
             />
@@ -174,7 +233,7 @@ const SecurityPosture: React.FC = () => {
           <Card style={{ background: '#1a1a1a', border: '1px solid #303030' }}>
             <Statistic
               title="Open Incidents"
-              value={40}
+              value={stats.open}
               prefix={<WarningOutlined />}
               valueStyle={{ color: '#ffc53d' }}
             />
@@ -184,7 +243,7 @@ const SecurityPosture: React.FC = () => {
           <Card style={{ background: '#1a1a1a', border: '1px solid #303030' }}>
             <Statistic
               title="Resolved Today"
-              value={18}
+              value={resolvedToday}
               prefix={<CheckCircleOutlined />}
               valueStyle={{ color: '#52c41a' }}
             />
@@ -216,16 +275,18 @@ const SecurityPosture: React.FC = () => {
       <Row style={{ marginTop: 16 }}>
         <Col span={24}>
           <Card
-            title="Recent Notable Events"
+            title={`Recent Notable Events (${stats.total} total)`}
             style={{ background: '#1a1a1a', border: '1px solid #303030' }}
             headStyle={{ color: '#fff', borderBottom: '1px solid #303030' }}
           >
             <Table
               columns={columns}
-              dataSource={recentNotables}
-              pagination={false}
+              dataSource={notables.map((n) => ({ ...n, key: n.id }))}
+              pagination={{ pageSize: 20 }}
               size="small"
               style={{ background: 'transparent' }}
+              loading={loading}
+              locale={{ emptyText: 'No notable events — ingest events and wait for correlation to run' }}
             />
           </Card>
         </Col>

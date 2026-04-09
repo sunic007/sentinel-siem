@@ -1,87 +1,185 @@
-"""Correlation engine — evaluates security rules against incoming events."""
+"""
+Correlation engine — evaluates built-in (and custom) rules against the search
+engine and creates notable events when rules fire.
 
+Design
+------
+* Rules are defined as SPL queries (see rules.py).
+* The engine fires each rule's query against the C++ search engine via the
+  existing EngineClient.
+* When a query returns results that satisfy the rule's condition the engine
+  creates a Notable and persists it in the in-memory NotableStore.
+* The scheduler (called from FastAPI lifespan) invokes run_all() periodically.
+"""
+
+import asyncio
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+from sentinel.correlation.rules import BUILTIN_RULES, BuiltinRule
+from sentinel.correlation.store import Notable, NotableStore
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class CorrelationRule:
-    id: str
-    name: str
-    description: str = ""
-    severity: str = "medium"
-    enabled: bool = True
-    query: str = ""  # SPL query or Sigma rule reference
-    condition: dict = field(default_factory=dict)
-    risk_score: int = 0
-    mitre_attack: list[str] = field(default_factory=list)
+# ---------------------------------------------------------------------------
+# Condition evaluator
+# ---------------------------------------------------------------------------
+
+def _condition_met(rule: BuiltinRule, result: dict[str, Any]) -> bool:
+    """Return True if search result satisfies the rule's firing condition."""
+    total = result.get("total_count", 0)
+    events = result.get("events", [])
+
+    cond = rule.condition
+
+    if "count_gt" in cond:
+        # total_count > N  OR  any aggregated row with count > N
+        threshold = cond["count_gt"]
+        if total > threshold:
+            return True
+        # aggregated results: each event has a "count" field
+        for ev in events:
+            try:
+                if int(ev.get("count", 0)) > threshold:
+                    return True
+            except (ValueError, TypeError):
+                pass
+        return False
+
+    if "count_ge" in cond:
+        threshold = cond["count_ge"]
+        if total >= threshold:
+            return True
+        for ev in events:
+            try:
+                if int(ev.get("count", 0)) >= threshold:
+                    return True
+            except (ValueError, TypeError):
+                pass
+        return False
+
+    # Default: any result → fire
+    return total > 0 or len(events) > 0
 
 
-@dataclass
-class NotableEvent:
-    id: str
-    rule_id: str
-    rule_name: str
-    severity: str
-    title: str
-    description: str
-    contributing_events: list[dict] = field(default_factory=list)
-    risk_score: int = 0
-    entities: list[str] = field(default_factory=list)
-    created_at: datetime = field(default_factory=datetime.utcnow)
-
+# ---------------------------------------------------------------------------
+# Correlation engine
+# ---------------------------------------------------------------------------
 
 class CorrelationEngine:
-    """Core correlation engine that evaluates rules against events."""
+    """Evaluates correlation rules against the search engine."""
 
-    def __init__(self):
-        self.rules: list[CorrelationRule] = []
-        self._running = False
+    def __init__(self, engine_client: Any, store: NotableStore) -> None:
+        self._client = engine_client
+        self._store = store
+        self._custom_rules: list[BuiltinRule] = []
 
-    def load_rules(self, rules: list[CorrelationRule]) -> None:
-        """Load correlation rules."""
-        self.rules = [r for r in rules if r.enabled]
-        logger.info("Loaded %d active correlation rules", len(self.rules))
+    def add_custom_rule(self, rule: BuiltinRule) -> None:
+        self._custom_rules.append(rule)
 
-    def evaluate(self, events: list[dict]) -> list[NotableEvent]:
-        """Evaluate all rules against a batch of events."""
-        notable_events: list[NotableEvent] = []
+    async def run_all(self) -> int:
+        """Run every enabled rule.  Returns count of new notables created."""
+        all_rules = BUILTIN_RULES + self._custom_rules
+        created = 0
 
-        for rule in self.rules:
-            matches = self._evaluate_rule(rule, events)
-            if matches:
-                notable = NotableEvent(
-                    id=f"NE-{rule.id}-{datetime.utcnow().timestamp():.0f}",
-                    rule_id=rule.id,
-                    rule_name=rule.name,
-                    severity=rule.severity,
-                    title=f"[{rule.severity.upper()}] {rule.name}",
-                    description=rule.description,
-                    contributing_events=matches,
-                    risk_score=rule.risk_score,
+        tasks = [self._evaluate_rule(rule) for rule in all_rules]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for rule, result in zip(all_rules, results):
+            if isinstance(result, Exception):
+                logger.warning("Rule %s evaluation error: %s", rule.id, result)
+                continue
+            if result:
+                await self._store.add(result)
+                created += 1
+                logger.info(
+                    "Notable created: [%s] %s (rule=%s)",
+                    result.severity.upper(),
+                    result.title,
+                    rule.id,
                 )
-                notable_events.append(notable)
-                logger.info("Notable event created: %s", notable.title)
 
-        return notable_events
+        if created:
+            logger.info("Correlation run complete — %d new notables", created)
+        return created
 
-    def _evaluate_rule(self, rule: CorrelationRule, events: list[dict]) -> list[dict]:
-        """Evaluate a single rule against events."""
-        # TODO: Implement rule evaluation logic
-        # This will integrate with the SPL engine for query-based rules
-        # and pySigma for Sigma rule evaluation
-        return []
+    async def _evaluate_rule(self, rule: BuiltinRule) -> Notable | None:
+        """Run a single rule.  Returns a Notable if it fires, else None."""
+        try:
+            result = await self._client.execute_query(rule.query)
+            result_dict = {
+                "total_count": result.total_count,
+                "events": result.events,
+            }
+        except Exception as exc:
+            logger.debug("Rule %s query failed: %s", rule.id, exc)
+            return None
 
-    def start(self) -> None:
-        """Start the correlation engine."""
-        self._running = True
-        logger.info("Correlation engine started with %d rules", len(self.rules))
+        if not _condition_met(rule, result_dict):
+            return None
 
-    def stop(self) -> None:
-        """Stop the correlation engine."""
-        self._running = False
-        logger.info("Correlation engine stopped")
+        # Extract contributing hosts from result events
+        hosts = list({
+            ev.get("host", "")
+            for ev in result.events[:10]
+            if ev.get("host")
+        })
+
+        return Notable(
+            id=str(uuid.uuid4()),
+            rule_id=rule.id,
+            rule_name=rule.name,
+            severity=rule.severity,
+            title=rule.name,
+            description=rule.description,
+            mitre=rule.mitre,
+            risk_score=rule.risk_score,
+            status="new",
+            host=", ".join(hosts[:3]) if hosts else "",
+            source="correlation",
+            contributing_events=result.events[:5],
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Background scheduler
+# ---------------------------------------------------------------------------
+
+async def run_correlation_loop(
+    engine_client: Any,
+    store: NotableStore,
+    interval_seconds: int = 60,
+) -> None:
+    """
+    Infinite asyncio loop that runs all correlation rules every `interval_seconds`.
+    Designed to run as a background task from FastAPI lifespan.
+    """
+    corr = CorrelationEngine(engine_client, store)
+    logger.info(
+        "Correlation scheduler started (interval=%ds, rules=%d)",
+        interval_seconds,
+        len(BUILTIN_RULES),
+    )
+
+    # Run immediately on startup (don't wait for first interval)
+    await asyncio.sleep(5)   # brief delay so engine client is fully ready
+    try:
+        await corr.run_all()
+    except Exception as exc:
+        logger.warning("Initial correlation run error: %s", exc)
+
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            await corr.run_all()
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logger.warning("Correlation run error: %s", exc)
+
+    logger.info("Correlation scheduler stopped")

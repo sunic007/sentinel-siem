@@ -2,6 +2,7 @@
 #include "common/logging.h"
 #include "indexer/segment.h"
 #include "ingest/pipeline.h"
+#include "ingest/syslog_receiver.h"
 #include "search/executor.h"
 #include "http/server.h"
 #include "spl/parser.h"
@@ -54,9 +55,19 @@ int main(int argc, char* argv[]) {
     sentinel::http::HttpServer http_server(config.http_port());
     http_server.start();
 
+    // Start syslog receiver (UDP + TCP)
+    sentinel::ingest::SyslogReceiver syslog_receiver(
+        ingest_pipeline,
+        config.syslog_udp_port(),
+        config.syslog_tcp_port()
+    );
+    syslog_receiver.start();
+
     // Main loop
     spdlog::info("Sentinel Engine is ready. Accepting connections.");
-    spdlog::info("  HTTP API: http://0.0.0.0:{}", config.http_port());
+    spdlog::info("  HTTP API:   http://0.0.0.0:{}", config.http_port());
+    spdlog::info("  Syslog UDP: 0.0.0.0:{}", config.syslog_udp_port());
+    spdlog::info("  Syslog TCP: 0.0.0.0:{}", config.syslog_tcp_port());
     spdlog::info("  POST /api/search   - Execute SPL queries");
     spdlog::info("  POST /api/ingest   - Ingest events");
     spdlog::info("  GET  /api/indexes  - List indexes");
@@ -68,6 +79,7 @@ int main(int argc, char* argv[]) {
 
     // Graceful shutdown
     spdlog::info("Shutting down...");
+    syslog_receiver.stop();
     http_server.stop();
     ingest_pipeline.stop();
     spdlog::info("Sentinel Engine stopped");

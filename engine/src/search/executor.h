@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 
 namespace sentinel::search {
@@ -16,6 +17,13 @@ struct SearchResult {
     int64_t total_matched = 0;
     int64_t segments_scanned = 0;
     double execution_time_ms = 0;
+};
+
+struct IndexInfo {
+    std::string name;
+    int64_t total_events = 0;
+    int64_t total_size_bytes = 0;
+    int32_t segment_count = 0;
 };
 
 class Executor {
@@ -30,10 +38,14 @@ public:
     // Register segments for searching
     void register_segment(std::shared_ptr<indexer::Segment> segment);
 
+    // List all indexes with stats
+    std::vector<IndexInfo> list_indexes() const;
+
 private:
     Executor() = default;
 
     common::Config config_;
+    mutable std::mutex mutex_;
     std::unordered_map<std::string, std::vector<std::shared_ptr<indexer::Segment>>> segments_;
 
     SearchResult execute_plan(const spl::ExecutionPlan& plan);

@@ -3,6 +3,7 @@
 #include "indexer/segment.h"
 #include "ingest/pipeline.h"
 #include "search/executor.h"
+#include "http/server.h"
 #include "spl/parser.h"
 
 #include <spdlog/spdlog.h>
@@ -36,7 +37,7 @@ int main(int argc, char* argv[]) {
     }
 
     spdlog::info("Data directory: {}", config.data_dir());
-    spdlog::info("Listen address: {}", config.listen_address());
+    spdlog::info("HTTP API port: {}", config.http_port());
 
     // Initialize components
     auto& ingest_pipeline = sentinel::ingest::Pipeline::instance();
@@ -49,14 +50,25 @@ int main(int argc, char* argv[]) {
     ingest_pipeline.start();
     spdlog::info("Ingest pipeline started");
 
+    // Start HTTP API server
+    sentinel::http::HttpServer http_server(config.http_port());
+    http_server.start();
+
     // Main loop
-    spdlog::info("Sentinel Engine is ready");
+    spdlog::info("Sentinel Engine is ready. Accepting connections.");
+    spdlog::info("  HTTP API: http://0.0.0.0:{}", config.http_port());
+    spdlog::info("  POST /api/search   - Execute SPL queries");
+    spdlog::info("  POST /api/ingest   - Ingest events");
+    spdlog::info("  GET  /api/indexes  - List indexes");
+    spdlog::info("  GET  /api/health   - Health check");
+
     while (g_running) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
     // Graceful shutdown
     spdlog::info("Shutting down...");
+    http_server.stop();
     ingest_pipeline.stop();
     spdlog::info("Sentinel Engine stopped");
 

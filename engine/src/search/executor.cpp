@@ -5,6 +5,8 @@
 #include <spdlog/spdlog.h>
 #include <chrono>
 #include <algorithm>
+#include <limits>
+#include <set>
 
 namespace sentinel::search {
 
@@ -54,8 +56,27 @@ SearchResult Executor::execute(const std::string& query_string) {
 }
 
 void Executor::register_segment(std::shared_ptr<indexer::Segment> segment) {
+    std::lock_guard<std::mutex> lock(mutex_);
     const auto& meta = segment->meta();
     segments_[meta.index_name].push_back(std::move(segment));
+}
+
+std::vector<IndexInfo> Executor::list_indexes() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<IndexInfo> result;
+
+    for (const auto& [name, segs] : segments_) {
+        IndexInfo info;
+        info.name = name;
+        info.segment_count = static_cast<int32_t>(segs.size());
+        for (const auto& seg : segs) {
+            info.total_events += seg->meta().event_count;
+            info.total_size_bytes += seg->meta().size_bytes;
+        }
+        result.push_back(info);
+    }
+
+    return result;
 }
 
 SearchResult Executor::execute_plan(const spl::ExecutionPlan& plan) {
@@ -101,6 +122,7 @@ SearchResult Executor::execute_plan(const spl::ExecutionPlan& plan) {
 }
 
 std::vector<spl::Row> Executor::scan_segments(const spl::ScanPlan& scan) {
+    std::lock_guard<std::mutex> lock(mutex_);
     std::vector<spl::Row> rows;
 
     auto it = segments_.find(scan.index);
@@ -223,6 +245,61 @@ std::vector<spl::Row> Executor::apply_aggregate(
                         try { sum += std::stod((*r)[agg_spec.field]); ++count; } catch (...) {}
                     }
                     result_row[agg_spec.alias] = count > 0 ? std::to_string(sum / count) : "0";
+                    break;
+                }
+                case spl::AggFunc::MIN: {
+                    double min_val = std::numeric_limits<double>::max();
+                    for (auto* r : group_rows) {
+                        try {
+                            double v = std::stod((*r)[agg_spec.field]);
+                            if (v < min_val) min_val = v;
+                        } catch (...) {}
+                    }
+                    result_row[agg_spec.alias] = std::to_string(min_val);
+                    break;
+                }
+                case spl::AggFunc::MAX: {
+                    double max_val = std::numeric_limits<double>::lowest();
+                    for (auto* r : group_rows) {
+                        try {
+                            double v = std::stod((*r)[agg_spec.field]);
+                            if (v > max_val) max_val = v;
+                        } catch (...) {}
+                    }
+                    result_row[agg_spec.alias] = std::to_string(max_val);
+                    break;
+                }
+                case spl::AggFunc::DC: {
+                    std::set<std::string> unique;
+                    for (auto* r : group_rows) {
+                        unique.insert((*r)[agg_spec.field]);
+                    }
+                    result_row[agg_spec.alias] = std::to_string(unique.size());
+                    break;
+                }
+                case spl::AggFunc::VALUES: {
+                    std::set<std::string> unique;
+                    for (auto* r : group_rows) {
+                        unique.insert((*r)[agg_spec.field]);
+                    }
+                    std::string vals;
+                    for (const auto& v : unique) {
+                        if (!vals.empty()) vals += ", ";
+                        vals += v;
+                    }
+                    result_row[agg_spec.alias] = vals;
+                    break;
+                }
+                case spl::AggFunc::FIRST: {
+                    if (!group_rows.empty()) {
+                        result_row[agg_spec.alias] = (*group_rows.front())[agg_spec.field];
+                    }
+                    break;
+                }
+                case spl::AggFunc::LAST: {
+                    if (!group_rows.empty()) {
+                        result_row[agg_spec.alias] = (*group_rows.back())[agg_spec.field];
+                    }
                     break;
                 }
                 default:

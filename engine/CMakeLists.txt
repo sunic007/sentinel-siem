@@ -126,11 +126,15 @@ add_library(sentinel_engine STATIC
   src/ingest/file_monitor.cpp
   src/ingest/line_breaker.cpp
   src/ingest/timestamp_extractor.cpp
+
+  # HTTP API
+  src/http/server.cpp
 )
 
 target_include_directories(sentinel_engine PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party
 )
 
 target_link_libraries(sentinel_engine PUBLIC
@@ -139,6 +143,14 @@ target_link_libraries(sentinel_engine PUBLIC
   libzstd_static
   lz4_static
 )
+
+# Platform-specific: Winsock for Windows, pthreads for Linux
+if(WIN32)
+  target_link_libraries(sentinel_engine PUBLIC ws2_32)
+else()
+  find_package(Threads REQUIRED)
+  target_link_libraries(sentinel_engine PUBLIC Threads::Threads)
+endif()
 
 # ============================================================================
 # Engine Executable

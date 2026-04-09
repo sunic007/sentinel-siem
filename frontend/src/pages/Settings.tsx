@@ -1,15 +1,50 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Card, Tabs, Form, Input, Button, Switch, Table, Typography, Space, Tag } from 'antd';
 
 const { Title } = Typography;
 
+interface IndexData {
+  key: string;
+  name: string;
+  events: number;
+  size: string;
+  segments: number;
+  status: string;
+}
+
+const formatBytes = (bytes: number): string => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+};
+
 const Settings: React.FC = () => {
-  const indexes = [
-    { key: '1', name: 'main', events: 1250000, size: '2.4 GB', retention: '90 days', status: 'active' },
-    { key: '2', name: 'security', events: 890000, size: '1.8 GB', retention: '365 days', status: 'active' },
-    { key: '3', name: 'firewall', events: 3400000, size: '5.1 GB', retention: '30 days', status: 'active' },
-    { key: '4', name: 'windows', events: 560000, size: '1.1 GB', retention: '90 days', status: 'active' },
-  ];
+  const [indexes, setIndexes] = useState<IndexData[]>([]);
+  const [health, setHealth] = useState<Record<string, unknown>>({});
+
+  useEffect(() => {
+    fetch('/api/indexes')
+      .then((r) => r.json())
+      .then((data: Array<{name: string; total_events: number; total_size_bytes: number; segment_count: number}>) => {
+        setIndexes(
+          data.map((idx, i) => ({
+            key: String(i),
+            name: idx.name,
+            events: idx.total_events,
+            size: formatBytes(idx.total_size_bytes),
+            segments: idx.segment_count,
+            status: 'active',
+          }))
+        );
+      })
+      .catch(() => {});
+
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then(setHealth)
+      .catch(() => {});
+  }, []);
 
   const inputs = [
     { key: '1', name: 'Syslog UDP', type: 'syslog', port: 514, status: 'running', events: '1.2k/s' },
@@ -29,7 +64,7 @@ const Settings: React.FC = () => {
             { title: 'Name', dataIndex: 'name', key: 'name' },
             { title: 'Events', dataIndex: 'events', key: 'events', render: (n: number) => n.toLocaleString() },
             { title: 'Size', dataIndex: 'size', key: 'size' },
-            { title: 'Retention', dataIndex: 'retention', key: 'retention' },
+            { title: 'Segments', dataIndex: 'segments', key: 'segments' },
             {
               title: 'Status', dataIndex: 'status', key: 'status',
               render: (s: string) => <Tag color={s === 'active' ? 'green' : 'red'}>{s}</Tag>,

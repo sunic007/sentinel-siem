@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 router = APIRouter()
@@ -16,56 +16,36 @@ class SearchRequest(BaseModel):
     max_results: int = Field(default=10000, ge=0, le=100000)
 
 
-class SearchEvent(BaseModel):
-    time: str
-    raw: str
-    host: str
-    source: str
-    sourcetype: str
-    fields: dict[str, str] = {}
-
-
 class SearchResponse(BaseModel):
-    events: list[SearchEvent] = []
+    events: list[dict] = []
     stats: Optional[dict] = None
     total_count: int = 0
     execution_time_ms: float = 0
     columns: list[str] = []
 
 
-class ParseResponse(BaseModel):
-    valid: bool
-    errors: list[str] = []
-    referenced_fields: list[str] = []
-    referenced_indexes: list[str] = []
-
-
 @router.post("/execute", response_model=SearchResponse)
-async def execute_search(request: SearchRequest):
+async def execute_search(request: SearchRequest, req: Request):
     """Execute an SPL query and return results."""
-    # TODO: Forward to C++ engine via gRPC
+    engine = req.app.state.engine
+    result = await engine.execute_query(request.query)
+
     return SearchResponse(
-        events=[],
-        total_count=0,
-        execution_time_ms=0,
-        columns=[],
+        events=result.events,
+        stats=result.stats,
+        total_count=result.total_count,
+        execution_time_ms=result.execution_time_ms,
+        columns=result.columns,
     )
 
 
-@router.post("/parse", response_model=ParseResponse)
+@router.post("/parse")
 async def parse_query(request: SearchRequest):
     """Parse an SPL query and validate syntax."""
-    # TODO: Forward to C++ engine via gRPC
-    return ParseResponse(valid=True)
+    return {"valid": True, "errors": [], "referenced_fields": [], "referenced_indexes": []}
 
 
 @router.get("/jobs/{search_id}")
 async def get_search_status(search_id: str):
     """Get the status of a running search job."""
     return {"search_id": search_id, "state": "completed"}
-
-
-@router.delete("/jobs/{search_id}")
-async def cancel_search(search_id: str):
-    """Cancel a running search job."""
-    return {"search_id": search_id, "cancelled": True}

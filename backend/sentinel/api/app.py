@@ -1,25 +1,32 @@
 """FastAPI application factory."""
 
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from sentinel.api.routes import search, incidents, alerts, assets, threat_intel, dashboards
-from sentinel.api.middleware.auth import AuthMiddleware
+from sentinel.api.routes import search, incidents, alerts, assets, threat_intel, dashboards, ingest
+from sentinel.engine_client.client import EngineClient, EngineConfig
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan: startup and shutdown."""
-    # Startup
-    # TODO: Initialize gRPC connection pool to engine
-    # TODO: Initialize database connection pool
-    # TODO: Start Celery workers
+    # Initialize engine client
+    engine_config = EngineConfig(
+        host=os.getenv("ENGINE_HOST", "localhost"),
+        port=int(os.getenv("ENGINE_PORT", "8080")),
+    )
+    engine_client = EngineClient(engine_config)
+    await engine_client.connect()
+    app.state.engine = engine_client
+
     yield
+
     # Shutdown
-    # TODO: Close connections gracefully
+    await engine_client.disconnect()
 
 
 def create_app() -> FastAPI:
@@ -34,7 +41,7 @@ def create_app() -> FastAPI:
     # CORS
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://localhost:3000"],
+        allow_origins=["*"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -42,6 +49,7 @@ def create_app() -> FastAPI:
 
     # Routes
     app.include_router(search.router, prefix="/api/search", tags=["search"])
+    app.include_router(ingest.router, prefix="/api/ingest", tags=["ingest"])
     app.include_router(incidents.router, prefix="/api/incidents", tags=["incidents"])
     app.include_router(alerts.router, prefix="/api/alerts", tags=["alerts"])
     app.include_router(assets.router, prefix="/api/assets", tags=["assets"])
@@ -50,7 +58,18 @@ def create_app() -> FastAPI:
 
     @app.get("/api/health")
     async def health_check():
-        return {"status": "ok", "version": "0.1.0"}
+        engine = app.state.engine
+        engine_health = await engine.health_check()
+        return {
+            "status": "ok",
+            "version": "0.1.0",
+            "engine": engine_health,
+        }
+
+    @app.get("/api/indexes")
+    async def list_indexes():
+        engine = app.state.engine
+        return await engine.list_indexes()
 
     return app
 

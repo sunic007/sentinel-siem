@@ -1,5 +1,6 @@
 #include "ingest/pipeline.h"
 #include "ingest/timestamp_extractor.h"
+#include "search/executor.h"
 #include <spdlog/spdlog.h>
 #include <chrono>
 
@@ -89,15 +90,22 @@ int64_t Pipeline::ingest(const std::vector<IngestEvent>& events) {
 void Pipeline::flush_buffer() {
     if (buffer_.empty()) return;
 
+    // Determine index from the first event (all events in a batch share the same index for now)
+    std::string index_name = "main";
+
     auto now = std::chrono::system_clock::now().time_since_epoch();
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
     std::string segment_id = "seg_" + std::to_string(ms);
 
-    auto data_dir = std::filesystem::path(config_.data_dir()) / "indexes" / "main";
-    auto segment = indexer::Segment::create(data_dir, "main", segment_id);
+    auto data_dir = std::filesystem::path(config_.data_dir()) / "indexes" / index_name;
+    auto segment = indexer::Segment::create(data_dir, index_name, segment_id);
     segment->write_events(buffer_);
 
-    spdlog::info("Flushed {} events to segment {}", buffer_.size(), segment_id);
+    // Register segment with search executor so it's immediately searchable
+    auto shared_seg = std::shared_ptr<indexer::Segment>(std::move(segment));
+    search::Executor::instance().register_segment(shared_seg);
+
+    spdlog::info("Flushed {} events to segment {} (index={})", buffer_.size(), segment_id, index_name);
     buffer_.clear();
 }
 

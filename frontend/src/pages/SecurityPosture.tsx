@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Card, Col, Row, Statistic, Typography, Table, Tag } from 'antd';
 import {
   AlertOutlined,
@@ -11,6 +11,18 @@ import ReactECharts from 'echarts-for-react';
 const { Title } = Typography;
 
 const SecurityPosture: React.FC = () => {
+  const [totalEvents, setTotalEvents] = useState(0);
+  const [engineStatus, setEngineStatus] = useState<Record<string, unknown>>({});
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then((data) => {
+        setEngineStatus(data.engine || {});
+        setTotalEvents(Number(data.engine?.total_events_ingested || 0));
+      })
+      .catch(() => {});
+  }, []);
   const eventsOverTimeOption = {
     tooltip: { trigger: 'axis' },
     xAxis: {
@@ -141,8 +153,8 @@ const SecurityPosture: React.FC = () => {
         <Col span={6}>
           <Card style={{ background: '#1a1a1a', border: '1px solid #303030' }}>
             <Statistic
-              title="Total Events (24h)"
-              value={6876}
+              title="Total Events Ingested"
+              value={totalEvents}
               prefix={<ClockCircleOutlined />}
               valueStyle={{ color: '#1668dc' }}
             />
